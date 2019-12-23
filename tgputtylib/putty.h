@@ -25,6 +25,12 @@
 
 // #define DEBUG_UPLOAD
 
+#define cBufferMaxFillSizeThresholdToAcceptMoreUploadData 1024*1024
+
+// with these flags, tgsftp_mvex can skip checking whether the destination is an existing folder
+#define cMoveFlag_DestinationPathIncludesItemName 1
+#define cMoveFlag_AddSourceItemNameToDestinationPath 2
+
 /*
  * We express various time intervals in unsigned long minutes, but may need to
  * clip some values so that the resulting number of ticks does not overflow an
@@ -2267,7 +2273,7 @@ typedef struct
   __int64 tag;
 
   bool (*ls_callback)(const struct fxp_names *names,const void *libctx);
-  char* (*getpassword_callback)(const char *prompt, const bool echo, const bool *cancel, const void *libctx);
+  const char* (*getpassword_callback)(const char *prompt, const bool echo, bool *cancel, const void *libctx);
   void (*printmessage_callback)(const char *msg, const bool isstderr, const void *libctx);
   bool (*progress_callback)(const uint64_t bytescopied, const bool isupload, const void *libctx);
   int (*read_from_stream)(const uint64_t offset,void *buffer,const int bufsize, const void *libctx);
@@ -2292,6 +2298,16 @@ typedef struct
   // static items from sftp.c
   const char *fxp_error_message; // accessed by host application too
   int fxp_errtype; // accessed by host application too
+
+  void* (*malloc_callback) (size_t size);
+  void (*free_callback) (void* ptr);
+  void* (*realloc_callback)(void *ptr, size_t new_size);
+
+  void* (*debug_malloc_callback) (size_t size,const char *filename,const int line);
+  void (*debug_free_callback) (void* ptr,const char *filename,const int line);
+  void* (*debug_realloc_callback)(void *ptr, size_t new_size,const char *filename,const int line);
+
+  bool usememorycallbacks;
 
   // STRICTLY LIBRARY PRIVATE FIELDS FOLLOW
   tree234 *sftp_requests;
@@ -2345,14 +2361,19 @@ typedef struct
 
 extern __declspec(thread) TTGLibraryContext *curlibctx;
 
-#define printf(...) tgdll_print(dupprintf(__VA_ARGS__))
-#define fprintf(fp,...) tgdll_fprint(fp,dupprintf(__VA_ARGS__))
+#define printf(...) tgdll_printfree(dupprintf(__VA_ARGS__))
+#define fprintf(fp,...) tgdll_fprintfree(fp,dupprintf(__VA_ARGS__))
 #define fflush tgdll_fflush
 #define fwrite tgdll_fwrite
 #define fputs(msg,fp) fprintf(fp,"%s",msg)
 #define fputc(c,fp) fprintf(fp,"%c",c)
+
 int tgdll_print(const char *msg);
+int tgdll_printfree(char *msg);
+
 int tgdll_fprint(FILE *stream,const char *msg);
+int tgdll_fprintfree(FILE *stream,char *msg);
+
 int tgdll_fflush(FILE *stream);
 size_t tgdll_fwrite(const void *ptr,size_t size,size_t count,FILE *stream);
 void tgdll_assert(const char *msg,const char *filename,const int line);

@@ -481,11 +481,22 @@ char *do_select(SOCKET skt, bool startup)
         sftp_ssh_socket = INVALID_SOCKET;
 
     if (p_WSAEventSelect) {
-        if (startup) {
+        if (startup)
+        {
             events = (FD_CONNECT | FD_READ | FD_WRITE |
                       FD_OOB | FD_CLOSE | FD_ACCEPT);
-            netevent = CreateEvent(NULL, false, false, NULL);
-        } else {
+
+            if ((netevent==0) || (netevent==INVALID_HANDLE_VALUE)) // TG fix event handle leak: psftp 0.73 can create thousands of these while downloading a file
+            {
+               // this event is never freed in psftp.exe
+               // but it's freed in tgputtyfree when a TGPuttyLib context is freed
+               netevent = CreateEvent(NULL, false, false, NULL);
+            }
+            else
+               ResetEvent(netevent);
+        }
+        else
+        {
             events = 0;
         }
         if (p_WSAEventSelect(skt, netevent, events) == SOCKET_ERROR) {

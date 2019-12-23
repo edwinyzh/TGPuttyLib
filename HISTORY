@@ -1,0 +1,45 @@
+TGPuttyLib Release History
+---------------------
+
+Build 5 - 21 Dec 2019
+
+This update fixes memory and event handle leaks. The event handle leak in winsftp.c is actually
+still in the original PuTTY 0.73. I will try to submit the fix to them. The memory leaks were
+in DLL exclusive code (well except for one that doesn't affect us anyway).
+
+---------------------
+Build 4 - 3 Dec 2019
+
+This update fixes incorrect random permissions on uploaded files, which could happen when 
+files were uploaded from a Delphi stream (like the Delphi component does it, even if you 
+use the UploadFile method with a file path). 
+The bug itself was in the DLL.
+
+Also includes minor improvements in some of the Pascal source code files.
+
+---------------------
+Build 3 - 1 Dec 2019
+
+Added C++ Support, including binding and classes for C++ Builder and Visual C++, as well as 
+a native C++ Builder SFTP Client component that does not use any Delphi code. 
+
+No import library is needed for C++.
+
+---------------------
+
+Build 2 - 1 Nov 2019
+
+Adds true Delphi Component in tgputtysftpclient.pas, which is fully Unicode. Assumes UTF-8 Encoding is used.
+Adds VCL demo based on the new component.
+Fixes procedure tgputty_setverbose declaration.
+Fixes some UTF-8 problems in messages from the DLL.
+Minor Demo improvements, including Unicode support for local filenames when downloading.
+
+---------------------
+
+Build 1 - 20 Oct 2019
+
+Initial Release. Stable but more features will be added
+Known Issue: procedure tgputty_setverbose does not work due to missing cdecl;
+
+---------------------

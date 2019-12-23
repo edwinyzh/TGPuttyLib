@@ -84,18 +84,10 @@ static const SeatVtable psftp_seat_vt = {
 };
 static Seat psftp_seat[1] = {{ &psftp_seat_vt }};
 
-/* ----------------------------------------------------------------------
- * A nasty loop macro that lets me get an escape-sequence sanitised
- * version of a string for display, and free it automatically
- * afterwards.
- */
-// TG 2019: cannot put this in the libctx because freeing would
-// cause crashes, because stripctrl_free uses container_of and zeroes the container
-// but making this threadsafe should be good enough
-TGDLLCODE(__declspec(thread)) static StripCtrlChars *string_scc;
-#define with_stripctrl(varname, input)                                  \
-    for (char *varname = stripctrl_string(string_scc, input); varname;  \
-         sfree(varname), varname = NULL)
+// TG 2019: we do not want any strip ctrl stuff, it can break UTF-8 encodings
+#define with_stripctrl(varname, input)  \
+    for (char *varname = input; varname;  \
+         varname = NULL)
 
 /* ----------------------------------------------------------------------
  * Manage sending requests and waiting for replies.
@@ -484,7 +476,7 @@ bool sftp_get_file(char *fname, char *outfname, bool recurse, bool restart)
         }
 
         offset = get_file_posn(file);
-        printf("reget: restarting at file position %"PRIu64"\n", offset);
+        printf("reget: restarting at file position %I64u\n", offset);
     } else {
         offset = 0;
     }
@@ -492,12 +484,10 @@ bool sftp_get_file(char *fname, char *outfname, bool recurse, bool restart)
     if (outfname)
        with_stripctrl(san, fname) {
           with_stripctrl(sano, outfname)
-            printf("remote:%s => local:%s\n", san, sano);
+            printf("remote: %s => local:%s\n", san, sano);
        }
     else
-       with_stripctrl(san, fname) {
-            printf("remote:%s => stream \n", san);
-       }
+       printf("remote: %s => stream \n", fname);
 
     /*
      * FIXME: we can use FXP_FSTAT here to get the file size, and
@@ -509,7 +499,7 @@ bool sftp_get_file(char *fname, char *outfname, bool recurse, bool restart)
 	uint64_t lastprogresstick=starttick;
     bool canceled=false;
     xfer = xfer_download_init(fh, offset);
-    while (!xfer_done(xfer)) {
+    while (!xfer_done(xfer) && !canceled) {
         void *vbuf;
         int retd, len;
         int wpos, wlen;
@@ -730,7 +720,10 @@ bool sftp_put_file(char *fname, char *outfname, bool recurse, bool restart)
        }
     }
     else
+    {
        file=NULL; // if null, we will use a callback to read from stream
+       permissions=-1; // use default permissions
+    }
 
     attrs.flags = 0;
     PUT_PERMISSIONS(attrs, permissions);
@@ -770,7 +763,7 @@ bool sftp_put_file(char *fname, char *outfname, bool recurse, bool restart)
             goto cleanup;
         }
         offset = attrs.size;
-        printf("reput: restarting at file position %"PRIu64"\n", offset);
+        printf("reput: restarting at file position %I64u\n", offset);
 
         if (file) // TG 2019
            if (seek_file((WFile *)file, offset, FROM_START) != 0)
@@ -780,9 +773,9 @@ bool sftp_put_file(char *fname, char *outfname, bool recurse, bool restart)
     }
 
     if (fname!=NULL)
-       printf("local:%s => remote:%s\n", fname, outfname);
+       printf("local: %s => remote: %s\n", fname, outfname);
     else
-       printf("stream => remote:%s\n", outfname);
+       printf("stream => remote: %s\n", outfname);
 
     /*
      * FIXME: we can use FXP_FSTAT here to get the file size, and
@@ -1060,11 +1053,18 @@ void sftp_finish_wildcard_matching(SftpWildcardMatcher *swcm)
  */
 bool wildcard_iterate(char *filename, bool (*func)(void *, char *), void *ctx)
 {
-    char *unwcfname, *newname, *cname;
-    bool is_wc, toret;
+	char *unwcfname, *newname, *cname;
+	bool is_wc, toret;
 
-    unwcfname = snewn(strlen(filename)+1, char);
-    is_wc = !wc_unescape(unwcfname, filename);
+	unwcfname = snewn(strlen(filename)+1, char);
+
+#ifdef TGDLL
+	// no wildcard support in DLL!
+	// causes big problems, for example filenames with brackets are considered
+	// to contain wildcards
+	strcpy(unwcfname,filename);
+#else
+	is_wc = !wc_unescape(unwcfname, filename);
 
     if (is_wc) {
         SftpWildcardMatcher *swcm = sftp_begin_wildcard_matching(filename);
@@ -1091,14 +1091,17 @@ bool wildcard_iterate(char *filename, bool (*func)(void *, char *), void *ctx)
         }
 
         sftp_finish_wildcard_matching(swcm);
-    } else {
-        cname = canonify(unwcfname);
-        toret = func(ctx, cname);
-        sfree(cname);
-        sfree(unwcfname);
-    }
+	}
+	else
+#endif
+	{
+		cname = canonify(unwcfname);
+		toret = func(ctx, cname);
+		sfree(cname);
+		sfree(unwcfname);
+	}
 
-    return toret;
+	return toret;
 }
 
 /*
@@ -1106,10 +1109,14 @@ bool wildcard_iterate(char *filename, bool (*func)(void *, char *), void *ctx)
  */
 bool is_wildcard(char *name)
 {
-    char *unwcfname = snewn(strlen(name)+1, char);
-    bool is_wc = !wc_unescape(unwcfname, name);
-    sfree(unwcfname);
-    return is_wc;
+#ifdef TGDLL
+	return false; // no wildcard support
+#else
+	char *unwcfname = snewn(strlen(name)+1, char);
+	bool is_wc = !wc_unescape(unwcfname, name);
+	sfree(unwcfname);
+	return is_wc;
+#endif
 }
 
 /* ----------------------------------------------------------------------
@@ -1771,7 +1778,7 @@ static bool sftp_action_mv(void *vctx, char *srcfname)
     return toret;
 }
 
-int sftp_cmd_mv(struct sftp_command *cmd)
+int sftp_cmd_mvex(struct sftp_command *cmd,const int moveflags) // TG 2019
 {
     struct sftp_context_mv actx, *ctx = &actx;
     int i, ret;
@@ -1788,18 +1795,30 @@ int sftp_cmd_mv(struct sftp_command *cmd)
 
     ctx->dstfname = canonify(cmd->words[cmd->nwords-1]);
 
+    if ((moveflags & cMoveFlag_DestinationPathIncludesItemName) != 0)
+       ctx->dest_is_dir = false;
+    else
+       if ((moveflags & cMoveFlag_AddSourceItemNameToDestinationPath) != 0)
+          ctx->dest_is_dir = true;
+       else
+          ctx->dest_is_dir = check_is_dir(ctx->dstfname);
+
+	#ifndef TGDLL
+    // BIG PROBLEM! is_wildcard could return true if filename contains brackets
+    // this check is not needed for a DLL
     /*
      * If there's more than one source argument, or one source
      * argument which is a wildcard, we _require_ that the
      * destination is a directory.
      */
-    ctx->dest_is_dir = check_is_dir(ctx->dstfname);
-    if ((cmd->nwords > 3 || is_wildcard(cmd->words[1])) && !ctx->dest_is_dir) {
-        printf("mv: multiple or wildcard arguments require the destination"
-               " to be a directory\n");
-        sfree(ctx->dstfname);
-        return 0;
-    }
+
+	if ((cmd->nwords > 3 || is_wildcard(cmd->words[1])) && !ctx->dest_is_dir) {
+		printf("mv: multiple or wildcard arguments require the destination"
+			   " to be a directory\n");
+		sfree(ctx->dstfname);
+		return 0;
+	}
+	#endif
 
     /*
      * Now iterate over the source arguments.
@@ -1810,6 +1829,11 @@ int sftp_cmd_mv(struct sftp_command *cmd)
 
     sfree(ctx->dstfname);
     return ret;
+}
+
+int sftp_cmd_mv(struct sftp_command *cmd) // TG 2019
+{
+  return sftp_cmd_mvex(cmd,0);
 }
 
 struct sftp_context_chmod {
@@ -2536,11 +2560,15 @@ static int do_sftp_init(void)
 
 static void do_sftp_cleanup(void)
 {
-    char ch;
-    if (backend) {
-        backend_special(backend, SS_EOF, 0);
-        sent_eof = true;
-        sftp_recvdata(&ch, 1);
+    if (backend)
+    {
+        if (!sent_eof && backend_connected(backend))
+        {
+           char ch;
+           backend_special(backend, SS_EOF, 0);
+           sent_eof = true;
+           sftp_recvdata(&ch, 1);
+        }
         backend_free(backend);
         sftp_cleanup_request();
         backend = NULL;
@@ -2553,6 +2581,22 @@ static void do_sftp_cleanup(void)
         sfree(homedir);
         homedir = NULL;
     }
+}
+
+void free_sftp_command(struct sftp_command **acmd) // TG
+{
+  struct sftp_command *cmd = (*acmd);
+
+  if (cmd->words)
+  {
+     int i;
+     for (i = 0; i < cmd->nwords; i++)
+        sfree(cmd->words[i]);
+     sfree(cmd->words);
+  }
+  sfree(cmd);
+
+  *acmd = NULL;
 }
 
 int do_sftp(int mode, int modeflags, char *batchfile)
@@ -2574,13 +2618,7 @@ int do_sftp(int mode, int modeflags, char *batchfile)
             if (!cmd)
                 break;
             ret = cmd->obey(cmd);
-            if (cmd->words) {
-                int i;
-                for(i = 0; i < cmd->nwords; i++)
-                    sfree(cmd->words[i]);
-                sfree(cmd->words);
-            }
-            sfree(cmd);
+            free_sftp_command(&cmd); // TG
             if (ret < 0)
                 break;
         }
@@ -2597,7 +2635,7 @@ int do_sftp(int mode, int modeflags, char *batchfile)
             if (!cmd)
                 break;
 			ret = cmd->obey(cmd);
-            // TG 2019: memory leak here? not relevant for our DLL really
+            free_sftp_command(&cmd); // TG 2019
             if (ret < 0)
                 break;
             if (ret == 0) {
@@ -2920,7 +2958,10 @@ static int psftp_connect(char *userhost, char *user, int portnumber)
                  "exec sftp-server");
     conf_set_bool(conf, CONF_ssh_subsys2, false);
 
-    psftp_logctx = log_init(default_logpolicy, conf);
+    if (psftp_logctx=NULL) // TG - might connect again after disconnecting
+    {
+       psftp_logctx = log_init(default_logpolicy, conf);
+    }
 
     platform_psftp_pre_conn_setup();
 
@@ -2929,15 +2970,25 @@ static int psftp_connect(char *userhost, char *user, int portnumber)
                        conf_get_int(conf, CONF_port),
                        &realhost, 0,
                        conf_get_bool(conf, CONF_tcp_keepalives));
-    if (err != NULL) {
+    if (err != NULL)
+    {
         fprintf(stderr, "ssh_init: %s\n", err);
+        if (realhost != NULL)
+           sfree(realhost);
         return 1;
     }
     while (!backend_sendok(backend)) {
         if (backend_exitcode(backend) >= 0)
+        {
+            if (realhost != NULL)
+               sfree(realhost);
             return 1;
-        if (ssh_sftp_loop_iteration() < 0) {
+        }
+        if (ssh_sftp_loop_iteration() < 0)
+        {
             fprintf(stderr, "ssh_init: error during SSH connection setup\n");
+            if (realhost != NULL)
+               sfree(realhost);
             return 1;
         }
     }
@@ -2976,8 +3027,6 @@ static void init_thread_vars()
       stdio_sink_init(&stderr_ss, stderr);
       stderr_bs = BinarySink_UPCAST(&stderr_ss);
 
-      string_scc = stripctrl_new(NULL, false, L'\0');
-
       thread_vars_initialized=true;
    }
    //else
@@ -2988,8 +3037,6 @@ static void free_thread_vars()
 {
    if (thread_vars_initialized)
    {
-   	  //printf("calling stripctrl_free(string_scc)\n");
-   	  stripctrl_free(string_scc);
    	  //printf("calling stripctrl_free(stderr_scc)\n");
 	  stripctrl_free(stderr_scc);
       thread_vars_initialized=false;
@@ -3083,8 +3130,6 @@ TGDLLCODE(__declspec(dllexport)) int psftp_main(int argc, char *argv[]) // TG 20
         stderr_bs = BinarySink_UPCAST(stderr_scc);
     }
 
-    string_scc = stripctrl_new(NULL, false, L'\0');
-
     /*
      * If the loaded session provides a hostname, and a hostname has not
      * otherwise been specified, pop it in `userhost' so that
@@ -3124,11 +3169,13 @@ TGDLLCODE(__declspec(dllexport)) int psftp_main(int argc, char *argv[]) // TG 20
     cmdline_cleanup();
     sk_cleanup(true);
 
-    stripctrl_free(string_scc);
     stripctrl_free(stderr_scc);
 
     if (psftp_logctx)
+    {
         log_free(psftp_logctx);
+        psftp_logctx = NULL;
+    }
 
     return ret;
 }
@@ -3178,8 +3225,6 @@ __declspec(dllexport) int tgputty_initcontext(const bool averbose,TTGLibraryCont
 	conf = conf_new();
 	do_defaults(NULL, conf);
 	loaded_session = false;
-    libctx->sftp_ssh_socket = INVALID_SOCKET;
-    libctx->netevent = INVALID_HANDLE_VALUE;
 
     // initial values taken from sshcommon.c
     libctx->pktin_freeq_head.next = &libctx->pktin_freeq_head;
@@ -3329,14 +3374,8 @@ __declspec(dllexport) int tgputtysftpcommand(const char *line, TTGLibraryContext
   if (!cmd)
 	 return 2;
   int ret = cmd->obey(cmd);
-  if (cmd->words)
-  {
-	 int i;
-	 for(i = 0; i < cmd->nwords; i++)
-	   sfree(cmd->words[i]);
-	 sfree(cmd->words);
-  }
-  sfree(cmd);
+
+  free_sftp_command(&cmd);
   return ret;
 }
 
@@ -3370,6 +3409,10 @@ __declspec(dllexport) int tgsftp_connect(const char *ahost,const char *auser,con
 	 result=do_sftp_init();
 	 printf("do_sftp_init result is %d\n",result);
   }
+  else
+  {
+    do_sftp_cleanup();
+  }
 
   printf("tgsftp_connect final result is %d\n",result);
   return result;
@@ -3388,7 +3431,11 @@ __declspec(dllexport) int tgsftp_cd(const char *adir,TTGLibraryContext *libctx) 
   cmd->words[0] = dupstr("cd");
   cmd->words[1] = dupstr(adir);
 
-  return sftp_cmd_cd(cmd);
+  int result=sftp_cmd_cd(cmd);
+
+  free_sftp_command(&cmd);
+
+  return result;
 }
 
 __declspec(dllexport) int tgsftp_rm(const char *afile,TTGLibraryContext *libctx) // TG 2019
@@ -3425,7 +3472,9 @@ __declspec(dllexport) int tgsftp_ls(const char *adir,TTGLibraryContext *libctx) 
   else
 	 cmd->nwords = 0;
 
-  return sftp_cmd_ls(cmd);
+  int result=sftp_cmd_ls(cmd);
+  free_sftp_command(&cmd);
+  return result;
 }
 
 __declspec(dllexport) int tgsftp_mkdir(const char *adir,TTGLibraryContext *libctx) // TG 2019
@@ -3440,7 +3489,9 @@ __declspec(dllexport) int tgsftp_mkdir(const char *adir,TTGLibraryContext *libct
   cmd->words[0] = dupstr("mkdir");
   cmd->words[1] = dupstr(adir);
 
-  return sftp_cmd_mkdir(cmd);
+  int result=sftp_cmd_mkdir(cmd);
+  free_sftp_command(&cmd);
+  return result;
 }
 
 
@@ -3457,7 +3508,27 @@ __declspec(dllexport) int tgsftp_mv(const char *afrom,const char *ato,TTGLibrary
   cmd->words[1] = dupstr(afrom);
   cmd->words[2] = dupstr(ato);
 
-  return sftp_cmd_mv(cmd);
+  int result=sftp_cmd_mv(cmd);
+  free_sftp_command(&cmd);
+  return result;
+}
+
+__declspec(dllexport) int tgsftp_mvex(const char *afrom,const char *ato,const int moveflags,TTGLibraryContext *libctx) // TG 2019
+{
+  curlibctx=libctx;
+  struct sftp_command *cmd = snew(struct sftp_command);
+  cmd->words = NULL;
+  cmd->nwords = 3;
+  cmd->wordssize = 0;
+
+  sgrowarrayn(cmd->words, cmd->wordssize, cmd->nwords, 0);
+  cmd->words[0] = dupstr("mv");
+  cmd->words[1] = dupstr(afrom);
+  cmd->words[2] = dupstr(ato);
+
+  int result=sftp_cmd_mvex(cmd,moveflags);
+  free_sftp_command(&cmd);
+  return result;
 }
 
 __declspec(dllexport) int tgsftp_getstat(const char *afrom,struct fxp_attrs *attrs,TTGLibraryContext *libctx) // TG 2019
@@ -3671,7 +3742,25 @@ __declspec(dllexport) void tgputtyfree(TTGLibraryContext *libctx) // TG 2019
   printf("almost done\n");
 
   if (psftp_logctx)
+  {
      log_free(psftp_logctx);
+     psftp_logctx = NULL;
+  }
+
+  if ((libctx->netevent!=0) && (libctx->netevent!=INVALID_HANDLE_VALUE))
+     CloseHandle(libctx->netevent);
+
+  conf_free(conf);
+  if (libctx->timers)
+  {
+     freetree234(libctx->timers);
+     libctx->timers = NULL;
+  }
+  if (libctx->timer_contexts)
+  {
+     freetree234(libctx->timer_contexts);
+     libctx->timer_contexts = NULL;
+  }
 
   ContextCounter--;
   ThreadContextCounter--;
@@ -3699,7 +3788,7 @@ static int tg_get_userpass_input(Seat *seat, prompts_t *p, bufchain *input)
 		  {
 			 prompt_t *pr = p->prompts[curr_prompt];
 			 bool cancel=false;
-			 char *thepwd = curlibctx->getpassword_callback(pr->prompt,pr->echo,&cancel,curlibctx);
+			 const char *thepwd = curlibctx->getpassword_callback(pr->prompt,pr->echo,&cancel,curlibctx);
 
 			 if (cancel)
 				return 0;
@@ -3788,6 +3877,14 @@ int tgdll_print(const char *msg)
 	  return (int)strlen(msg);
    }
 }
+
+int tgdll_printfree(char *msg)
+{
+  int res=tgdll_print(msg);
+  sfree(msg);
+  return res;
+}
+
 int tgdll_fprint(FILE *stream,const char *msg)
 {
    if (!curlibctx->printmessage_callback || ((stream!=stdout) && (stream!=stderr)))
@@ -3805,6 +3902,14 @@ int tgdll_fprint(FILE *stream,const char *msg)
 	  return (int)strlen(msg);
    }
 }
+
+int tgdll_fprintfree(FILE *stream,char *msg)
+{
+  int res=tgdll_fprint(stream,msg);
+  sfree(msg);
+  return res;
+}
+
 int tgdll_fflush(FILE *stream)
 {
   if ((stream!=stdout) && (stream!=stdin) && (stream!=stderr))

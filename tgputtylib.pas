@@ -1,6 +1,10 @@
 unit tgputtylib;
 
-{$ifdef FPC}{$MODE Delphi}{$endif}
+{$ifdef FPC}
+{$MODE Delphi}
+{$else}
+{$WARN SYMBOL_PLATFORM OFF}
+{$endif}
 
 interface
 
@@ -38,6 +42,9 @@ const
    SSH_FXF_TRUNC                =$00000010;
    SSH_FXF_EXCL                 =$00000020;
 
+   // with these flags, tgsftp_mvex can skip checking whether the destination is an existing folder
+   cMoveFlag_DestinationPathIncludesItemName =1;
+   cMoveFlag_AddSourceItemNameToDestinationPath =2;
 
 type fxp_attrs=record
        flags:UInt32;
@@ -79,8 +86,8 @@ type fxp_attrs=record
                                          const verificationstatus:Integer;const storehostkey:PBoolean;
                                          const libctx:PTGLibraryContext):Boolean; cdecl;
        raise_exception_callback:procedure(const msg:PAnsiChar;const srcfile:PAnsiChar;const line:Integer;const libctx:PTGLibraryContext); cdecl;
-       entercriticalsection_callback:procedure(const Num:Integer);
-       leavecriticalsection_callback:procedure(const Num:Integer);
+       entercriticalsection_callback:procedure(const Num:Integer); cdecl;
+       leavecriticalsection_callback:procedure(const Num:Integer); cdecl;
 
        // these aren't really good for much ...
        mode:Integer;
@@ -94,6 +101,16 @@ type fxp_attrs=record
        fxp_error_message:PAnsiChar;
        fxp_errtype:Integer;
 
+       malloc_callback:function(size:NativeUInt):Pointer;  cdecl;
+       free_callback:procedure(ptr:Pointer);  cdecl;
+       realloc_callback:function(ptr:Pointer; newsize:NativeUInt):Pointer;  cdecl;
+
+       debug_malloc_callback:function(size:NativeUInt;const srcfile:PAnsiChar;const line:Integer):Pointer;  cdecl;
+       debug_free_callback:procedure(ptr:Pointer;const srcfile:PAnsiChar;const line:Integer);  cdecl;
+       debug_realloc_callback:function(ptr:Pointer; newsize:NativeUInt;const srcfile:PAnsiChar;const line:Integer):Pointer;  cdecl;
+
+       usememorycallbacks: Boolean;
+
        reserved:array[0..300] of Byte;
 
        procedure Init;
@@ -101,60 +118,61 @@ type fxp_attrs=record
 
 // run the whole psftp interactive commmand prompt
 // includes init and cleanup, only one function call needed
-function psftp_main(argcparam: Longint; argvparam: ppchar):Integer; cdecl; external tgputtydll;
+function psftp_main(argcparam: Longint; argvparam: ppchar):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
 // basic functions
-function tggetlibrarycontextsize:Integer; cdecl; external tgputtydll;
-function tgputty_initwithcmdline(argcparam: Longint; argvparam: ppchar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
-function tgputty_initcontext(const verbose:Boolean;const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
-procedure tgputtysetappname(const newappname,appversion:PAnsiChar); cdecl; external tgputtydll;
-procedure tgputty_setverbose(const averbose:Boolean); external tgputtydll;
-procedure tgputtyfree(const libctx:PTGLibraryContext); cdecl; external tgputtydll;
-procedure tgputtygetversions(puttyrelease:PDouble; tgputtylibbuild:PInteger); cdecl; external tgputtydll; // TG 2019
+function tggetlibrarycontextsize:Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgputty_initwithcmdline(argcparam: Longint; argvparam: ppchar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgputty_initcontext(const verbose:Boolean;const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+procedure tgputtysetappname(const newappname,appversion:PAnsiChar); cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+procedure tgputty_setverbose(const averbose:Boolean); cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+procedure tgputtyfree(const libctx:PTGLibraryContext); cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+procedure tgputtygetversions(puttyrelease:PDouble; tgputtylibbuild:PInteger); cdecl; external tgputtydll {$ifndef FPC}delayed{$endif}; // TG 2019
 
 // run the whole psftp interactive commmand prompt
 // after calling tgputtyinit
-function tgputtyrunpsftp(const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
+function tgputtyrunpsftp(const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
 // run psftp command lines
-function tgputtysftpcommand(const line:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
+function tgputtysftpcommand(const line:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
 // individual SFTP commands
-procedure tgputty_setkeyfile(const aPathname:PAnsiChar;const libctx:PTGLibraryContext); cdecl; external tgputtydll;
+procedure tgputty_setkeyfile(const aPathname:PAnsiChar;const libctx:PTGLibraryContext); cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 function tgsftp_connect(const aHost,aUser:PAnsiChar;
                         const aPort:Integer;
-                        const aPassword:PAnsiChar;const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
-procedure tgsftp_close(const libctx:PTGLibraryContext); cdecl; external tgputtydll;
+                        const aPassword:PAnsiChar;const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+procedure tgsftp_close(const libctx:PTGLibraryContext); cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
-function tgsftp_cd(const adir:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
-function tgsftp_ls(const adir:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
+function tgsftp_cd(const adir:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgsftp_ls(const adir:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
-function tgsftp_rm(const afile:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
-function tgsftp_rmdir(const adir:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
-function tgsftp_mkdir(const adir:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
-function tgsftp_mv(const afrom,ato:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
+function tgsftp_rm(const afile:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgsftp_rmdir(const adir:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgsftp_mkdir(const adir:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgsftp_mv(const afrom,ato:PAnsiChar; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgsftp_mvex(const afrom,ato:PAnsiChar; const moveflags:Integer; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
-function tgsftp_putfile(const afromfile,atofile:PAnsiChar; const anAppend:Boolean; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
-function tgsftp_getfile(const afromfile,atofile:PAnsiChar; const anAppend:Boolean; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
+function tgsftp_putfile(const afromfile,atofile:PAnsiChar; const anAppend:Boolean; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgsftp_getfile(const afromfile,atofile:PAnsiChar; const anAppend:Boolean; const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
-function tgsftp_getstat(const afile:PAnsiChar; attrs:Pfxp_attrs; const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll;
-function tgsftp_setstat(const afile:PAnsiChar; attrs:Pfxp_attrs; const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll;
+function tgsftp_getstat(const afile:PAnsiChar; attrs:Pfxp_attrs; const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgsftp_setstat(const afile:PAnsiChar; attrs:Pfxp_attrs; const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
 function tgputty_openfile(const apathname:PAnsiChar;
                           const anopenflags:Integer;
                           const attrs:Pfxp_attrs;
-                          const libctx:PTGLibraryContext):TSFTPFileHandle; cdecl; external tgputtydll;
+                          const libctx:PTGLibraryContext):TSFTPFileHandle; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 function tgputty_closefile(const fh:PSFTPFileHandle;
-                           const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll;
+                           const libctx:PTGLibraryContext):Integer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
-function tgputty_xfer_upload_init(const fh:TSFTPFileHandle;const offset:UInt64; const libctx:PTGLibraryContext):TSFTPTransfer; cdecl; external tgputtydll;
-function tgputty_xfer_upload_ready(const xfer:TSFTPTransfer; const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll;
+function tgputty_xfer_upload_init(const fh:TSFTPFileHandle;const offset:UInt64; const libctx:PTGLibraryContext):TSFTPTransfer; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgputty_xfer_upload_ready(const xfer:TSFTPTransfer; const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 procedure tgputty_xfer_upload_data(const xfer:TSFTPTransfer;const buffer:Pointer;
                                    const len:Integer;const anoffset:UInt64;
-                                   const libctx:PTGLibraryContext); cdecl; external tgputtydll;
-function tgputty_xfer_ensuredone(const xfer:TSFTPTransfer;const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll;
-function tgputty_xfer_done(const xfer:TSFTPTransfer;const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll;
-procedure tgputty_xfer_cleanup(const xfer:TSFTPTransfer;const libctx:PTGLibraryContext); cdecl; external tgputtydll;
+                                   const libctx:PTGLibraryContext); cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgputty_xfer_ensuredone(const xfer:TSFTPTransfer;const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+function tgputty_xfer_done(const xfer:TSFTPTransfer;const libctx:PTGLibraryContext):Boolean; cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
+procedure tgputty_xfer_cleanup(const xfer:TSFTPTransfer;const libctx:PTGLibraryContext); cdecl; external tgputtydll {$ifndef FPC}delayed{$endif};
 
 implementation
 
@@ -163,14 +181,14 @@ const MaxCritSect=0; // not currently used
 
 var CritSects:array[1..MaxCritSect] of TCriticalSection;
 
-procedure TGPuttyDLLEnterCriticalSection(const Num:Integer);
+procedure TGPuttyDLLEnterCriticalSection(const Num:Integer); cdecl;
 begin
   if (Num<1) or (Num>MaxCritSect) then
      raise Exception.Create('Invalid tgputtydll critical section number '+IntToStr(Num));
   CritSects[Num].Enter;
   end;
 
-procedure TGPuttyDLLLeaveCriticalSection(const Num:Integer);
+procedure TGPuttyDLLLeaveCriticalSection(const Num:Integer); cdecl;
 begin
   if (Num<1) or (Num>MaxCritSect) then
      raise Exception.Create('Invalid tgputtydll critical section number '+IntToStr(Num));
